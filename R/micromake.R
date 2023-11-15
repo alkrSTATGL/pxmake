@@ -2,6 +2,7 @@
 #'
 #' Turn a dataset and its metadata into a series of px-files, one for each
 #' variable in the original dataset, except time vars.
+#' @import parrallel
 #'
 #' @param data_df A data frame.
 #' @param metadata_path An Excel workbook created by metamake.
@@ -9,7 +10,7 @@
 #'
 #' @returns Nothing
 #' @export
-micromake <- function(data_df, metadata_path, out_dir = NULL) {
+micromake <- function(data_df, metadata_path, out_dir = NULL, cluster = NULL) {
   print_out_dir <- is.null(out_dir)
 
   if (is.null(out_dir)) out_dir <- temp_dir()
@@ -30,20 +31,42 @@ micromake <- function(data_df, metadata_path, out_dir = NULL) {
 
   micro_vars <- setdiff(names(data_df), c(time_var, figures_var))
 
-  for (micro_var in micro_vars) {
-    data_df_micro <-
-      data_df %>%
-      dplyr::select(all_of(c(time_var, micro_var))) %>%
-      tidyr::drop_na(!!micro_var) %>%
-      dplyr::count(across(everything())) %>%
-      dplyr::arrange_all()
+  if (cluster == NULL) {  # If clusters are NULL
+    for (micro_var in micro_vars) {
+      data_df_micro <-
+        data_df %>%
+        dplyr::select(all_of(c(time_var, micro_var))) %>%
+        tidyr::drop_na(!!micro_var) %>%
+        dplyr::count(across(everything())) %>%
+        dplyr::arrange_all()
 
-    pxmake(input = metadata_path,
-           data = data_df_micro,
-           out_path = file.path(out_dir, paste0('micro_', micro_var, '.px'))
-           )
+      pxmake(input = metadata_path,
+             data = data_df_micro,
+             out_path = file.path(out_dir, paste0('micro_', micro_var, '.px'))
+             )
+    }
+  } else {
+    library(parallel)
+    cl <- makeCluster(detectCores() - 1)  # reserve one core for system processes
+    clusterExport(cl, c("data_df", "metadata_path", "out_dir", "pxmake"))  # variables accessable to the cluster from Global
+
+    results <- parLapply(cl, micro_vars, function(micro_var) {
+      data_df_micro <- data_df %>%
+        dplyr::select(all_of(c(time_var, micro_var))) %>%
+        tidyr::drop_na(!!micro_var) %>%
+        dplyr::count(across(everything())) %>%
+        dplyr::arrange_all()
+
+      pxmake(input = metadata_path,
+             data = data_df_micro,
+             out_path = file.path(out_dir, paste0('micro_', micro_var, '.px'))
+      )
+    })
+
+    stopCluster(cl)
+
+
   }
-
   if (print_out_dir) print(paste("Created px-files in:", out_dir))
 }
 
